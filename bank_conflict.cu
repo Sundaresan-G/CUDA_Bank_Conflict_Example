@@ -1,27 +1,34 @@
 #include <iostream>
 
-#define N 2
+#define number float
 
-#define number int
+constexpr int THREADS_PER_BLOCK=256;
+
+constexpr size_t N = (size_t)8192*8192;
+
+// Issue 1 to avoid all bank conflicts or 32 in case of int or float to get max bank conflicts
+int OFFSET = 1;
 
 using namespace std;
 
-__global__ void add(number *a){
-    __shared__ number sharedA[N + 2048];
+__global__ void bankConflictKernel(number *a, int OFFSET){
+    extern __shared__ number sharedA[];
     // __shared__ number sharedB[N + 2048];
 
-    unsigned int index = blockDim.x * blockIdx.x + threadIdx.x;   
+    size_t index = blockDim.x * blockIdx.x + threadIdx.x;   
 
-    int stride = 0;
+    if (index >= N) return;
 
-    if (index != 0)
-        stride = index*32 - index%32;
+    int stride = threadIdx.x*OFFSET;
+
+    // if (index != 0)
+    //     stride = index*32 - index%32;
 
     // if (index %2 == 0)
     //     stride = 33;
     // else 
     //     stride = 0;
-    sharedA[index + stride] = index;
+    sharedA[stride] = index;
 
     // for (stride = 1; stride < 66; stride++)  
     // sharedA[index+stride] = index+stride;  
@@ -32,25 +39,58 @@ __global__ void add(number *a){
 
     __syncthreads();
 
-    if (index == 0){
-        // if (sharedB[0] == 'c')
-        *a = sharedA[index];
-    }
+    // This is included so that compiler does not eliminate the dead code
+    // if (index == 0){
+    //     // if (sharedB[0] == 'c')
+    //     *a = sharedA[index];
+    // }
+
+    a[index] = sharedA[stride];
     
 }
 
 int main(){
 
-    number *da, a=0;
+    number *da;
 
-    cudaMalloc((void **)&da, sizeof(number));
+    cudaMalloc((void **)&da, sizeof(number) * N);
 
-    int num_threads = N;
+    size_t num_threads = THREADS_PER_BLOCK;
 
-    add<<<1, num_threads>>>(da);  
+    size_t num_blocks = (N + num_threads - 1)/num_threads;
 
-    cudaMemcpy(&a, da, sizeof(number), cudaMemcpyDeviceToHost);
+    // Warmup
+    // 8 * sizeof(number) is 32 or 64 depending on float or double
+    bankConflictKernel<<<num_blocks, num_threads, THREADS_PER_BLOCK * 8 * sizeof(number) * sizeof(number)>>>(da, OFFSET); 
+    // cudaDeviceSynchronize();
 
-    cout << a << endl;
+    cudaEvent_t start, stop;
+
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    // cudaDeviceSynchronize();
+
+    cout << "Total Elapsed time for " << N << " elements is \n";
+    printf("Offset ElapsedTime\n");
+
+    for (OFFSET = 1; OFFSET <= 32; OFFSET ++){
+
+        cudaEventRecord(start, 0);
+        bankConflictKernel<<<num_blocks, num_threads, THREADS_PER_BLOCK * 8 * sizeof(number) * sizeof(number)>>>(da, OFFSET);  
+        cudaEventRecord(stop, 0);
+
+        cudaEventSynchronize(stop);
+
+        float elapsedTime = 0;
+
+        cudaEventElapsedTime(&elapsedTime, start, stop);
+
+        printf("%6d %10.8f\n", OFFSET, elapsedTime);
+
+        // cout << "Total Elapsed time for " << N << " elements with offset " << OFFSET << " is "<<elapsedTime <<" ms\n";
+    }
+
+    return 0;
 
 }

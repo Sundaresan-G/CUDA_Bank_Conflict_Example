@@ -1,5 +1,18 @@
 #include <iostream>
 
+// Macro to check CUDA errors
+#define CUDA_CHECK_ERROR(call)                              \
+    {                                                       \
+        cudaError_t err = call;                             \
+        if (err != cudaSuccess) {                           \
+            std::cerr << "CUDA error in file '" << __FILE__ \
+                      << "' in line " << __LINE__           \
+                      << ": " << cudaGetErrorString(err)    \
+                      << " (" << err << ")" << std::endl;   \
+            exit(EXIT_FAILURE);                             \
+        }                                                   \
+    }
+
 #define number float
 
 constexpr int THREADS_PER_BLOCK=256;
@@ -53,7 +66,7 @@ int main(){
 
     number *da;
 
-    cudaMalloc((void **)&da, sizeof(number) * N);
+    CUDA_CHECK_ERROR(cudaMalloc((void **)&da, sizeof(number) * N));
 
     size_t num_threads = THREADS_PER_BLOCK;
 
@@ -64,10 +77,12 @@ int main(){
     bankConflictKernel<<<num_blocks, num_threads, THREADS_PER_BLOCK * 8 * sizeof(number) * sizeof(number)>>>(da, OFFSET); 
     // cudaDeviceSynchronize();
 
+    CUDA_CHECK_ERROR(cudaGetLastError());
+
     cudaEvent_t start, stop;
 
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    CUDA_CHECK_ERROR(cudaEventCreate(&start));
+    CUDA_CHECK_ERROR(cudaEventCreate(&stop));
 
     // cudaDeviceSynchronize();
 
@@ -76,15 +91,17 @@ int main(){
 
     for (OFFSET = 1; OFFSET <= 32; OFFSET ++){
 
-        cudaEventRecord(start, 0);
+        CUDA_CHECK_ERROR(cudaEventRecord(start, 0));
         bankConflictKernel<<<num_blocks, num_threads, THREADS_PER_BLOCK * 8 * sizeof(number) * sizeof(number)>>>(da, OFFSET);  
-        cudaEventRecord(stop, 0);
 
-        cudaEventSynchronize(stop);
+        CUDA_CHECK_ERROR(cudaGetLastError());
+        CUDA_CHECK_ERROR(cudaEventRecord(stop, 0));
+
+        CUDA_CHECK_ERROR(cudaEventSynchronize(stop));
 
         float elapsedTime = 0;
 
-        cudaEventElapsedTime(&elapsedTime, start, stop);
+        CUDA_CHECK_ERROR(cudaEventElapsedTime(&elapsedTime, start, stop));
 
         printf("%6d %10.8f\n", OFFSET, elapsedTime);
 
